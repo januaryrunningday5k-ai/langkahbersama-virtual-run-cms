@@ -1,6 +1,6 @@
 # Virtual Run Event CMS
 
-A reusable, multi-event CMS for virtual running events. It includes a public registration page, admin event/participant dashboard, Stripe Checkout with webhook-confirmed payment, automatic PDF ticket email, activity proof uploads, and optional Strava OAuth/activity sync.
+A reusable, multi-event CMS for virtual running events. It includes a public registration page, admin event/participant dashboard, Stripe Checkout with webhook-confirmed payment, automatic PDF ticket email, activity proof uploads, and optional Strava linking/activity sync.
 
 ## Requirements
 
@@ -20,7 +20,7 @@ npm start
 
 Open http://localhost:3000. On first run, the CMS creates the database and seeds an example event. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before starting; the password must be at least 12 characters. Visit `/admin` for the event dashboard.
 
-Without Stripe configuration, online checkout is disabled (no fake payment success). You can inspect registration and content management locally. In production, use HTTPS and a permanent disk.
+Without Stripe configuration, online checkout is disabled (no fake payment success). In production, use HTTPS and a permanent disk.
 
 ## Stripe setup
 
@@ -31,26 +31,27 @@ Without Stripe configuration, online checkout is disabled (no fake payment succe
 
 Never mark a registration paid based only on the browser redirect. Configure webhook retries and monitor server logs.
 
-## Strava setup (optional)
+## Strava setup
 
-Create an API application in Strava and set its authorization callback URL to `https://YOUR-DOMAIN/api/strava/callback`. Configure `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, and `BASE_URL`. After registering, the participant can use the unique registration code to link Strava at `/api/strava/connect/CODE`. The app requests read access to activities and offers a sync button on the activity page. Strava API availability, quotas, scopes, and review requirements are controlled by Strava; verify current requirements before launch.
+Create a Strava API application and set its OAuth callback to `https://YOUR-DOMAIN/api/strava/callback`. Configure `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, and `BASE_URL`. After registering, the participant can link Strava at `/api/strava/connect/CODE` and sync activities from `/track/CODE`. Strava scopes, API limits, and review requirements are controlled by Strava; verify current requirements before launch.
 
 ## CMS and event lifecycle
 
-- `/admin`: sign in, create/edit events, activate the public event, and review registrations/activity proofs.
+- `/admin`: create and edit event details, activate a public event, search participants, export the latest 1,000 registrations to CSV, resend tickets, and review activity proofs.
 - `/`: public event landing/registration.
 - `/track/CODE`: upload a JPG/PNG/PDF activity proof or link/sync Strava.
 - Ticket PDF is generated and emailed only after verified payment.
 - Each event has a slug, dates, distances/prices, description, and active flag. Only one event can be active for public registration at a time.
 
-## Production checklist
+## Important security and operational limitations
 
-- Use a managed database or persistent SQLite volume; local ephemeral filesystems lose data on redeploy. For multiple app instances, migrate SQLite and sessions to PostgreSQL/Redis.
-- Configure HTTPS, secure session secret, backups, SMTP deliverability, Stripe live webhook, privacy/retention policy, and operational monitoring.
-- Set a strong unique `SESSION_SECRET` and strong admin password. Keep `.env`, Stripe secrets, SMTP password, and Strava secret private.
-- Uploads are stored on local disk and restricted by size/type. Use durable private object storage and malware scanning for a public production deployment.
-- Add payment reconciliation, refund handling, consent/legal copy, rate-limit tuning, and accessibility/content review for your event.
+This repository is a starter application, not yet ready to accept real participant data or payments without further hardening and testing. In particular:
 
-## Environment variables
+- Participant tracking currently uses a registration code in the URL as the access credential. Anyone who obtains that URL can see the tracking page and submit activity. Before launch, replace this with an expiring, single-purpose email verification link or OTP, add revocation, and rate-limit verification/upload endpoints.
+- Upload filtering currently relies on the client-supplied MIME type. Before public use, validate file signatures, store files in private durable storage, and scan for malware; serve proof files only through authenticated admin routes.
+- Ticket email failures are logged, not placed in a durable retry queue. Add retry/backoff and admin delivery status monitoring before a real event.
+- Add backup/restore drills, payment reconciliation/refunds, privacy/retention policy, admin audit log, and production monitoring.
+- SQLite/local upload storage requires a persistent disk and a single app instance. For horizontal scaling, migrate to managed PostgreSQL, shared session storage, and private object storage.
+- Configure HTTPS, a unique strong `SESSION_SECRET`, strong admin password, SMTP deliverability, Stripe live webhook, privacy/legal copy, and test the full paid-registration flow in staging.
 
-See `.env.example`. The application intentionally does not include real credentials or claim a payment has completed without a verified provider webhook.
+Do not put credentials in the repository or send secrets in chat. Configure them as environment variables in the hosting provider.
