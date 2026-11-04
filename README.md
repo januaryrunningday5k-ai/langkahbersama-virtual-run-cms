@@ -1,57 +1,34 @@
 # Virtual Run Event CMS
 
-A reusable, multi-event CMS for virtual running events. It includes a public registration page, admin event/participant dashboard, Stripe Checkout with webhook-confirmed payment, automatic PDF ticket email, activity proof uploads, and optional Strava linking/activity sync.
+Reusable virtual-run CMS with admin event management, Stripe checkout, paid-ticket PDF/email delivery, participant activity uploads and optional Strava sync.
 
-## Requirements
+## Setup
 
-- Node.js 20+
-- A persistent disk for SQLite and uploaded proofs in production
-- Stripe account/webhook endpoint for online payments
-- SMTP credentials for ticket email
-- Strava API application (optional)
+Requires Node.js 20+, persistent storage for SQLite/uploads, Stripe and SMTP configuration for paid production use. Copy `.env.example` to `.env`, set a unique 32+ character `SESSION_SECRET`, `ADMIN_EMAIL`, and strong `ADMIN_PASSWORD`, then run `npm install && npm start`. Visit `/` and `/admin`.
 
-## Run locally
+## Ticket email retry queue
 
-```sh
-cp .env.example .env
-npm install
-npm start
-```
+Verified Stripe webhooks enqueue a durable SQLite email job. The worker retries delivery with exponential backoff (up to 12 attempts); administrators can enqueue a resend using `/api/admin/tickets/CODE/resend` after sign-in. Jobs and failure details are available from `/api/admin/ticket-jobs`. Configure SMTP to send mail. The webhook remains idempotent and never trusts a browser redirect for payment confirmation.
 
-Open http://localhost:3000. On first run, the CMS creates the database and seeds an example event. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before starting; the password must be at least 12 characters. Visit `/admin` for the event dashboard.
+## Participant access
 
-Without Stripe configuration, online checkout is disabled (no fake payment success). In production, use HTTPS and a permanent disk.
+A ticket code alone does not grant access to participant details or activity submission. Participants enter the ticket code and registration email at `/track/CODE`; the server emails a one-time, 20-minute verification link. The token is stored as a SHA-256 hash, is single-use, and establishes an HTTP-only session. The tracking API, upload endpoint, Strava connect and sync endpoints require this participant session. The participant can end the session with the logout button. Configure SMTP for verification messages.
 
-## Stripe setup
+## Upload security
 
-1. Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`.
-2. Add a Stripe webhook pointing to `https://YOUR-DOMAIN/api/stripe/webhook` and subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`.
-3. Set `BASE_URL` to the public HTTPS origin. The server marks an order paid only after a verified webhook, then creates the PDF ticket and emails it.
-4. Test with Stripe test-mode credentials before accepting real payments.
+Uploads are held in memory while size-limited, then accepted only when their file signature matches JPEG, PNG, or PDF. Server-generated random filenames and restrictive file permissions are used; files are not served publicly and admin access is required to view them. This is format validation, not malware scanning. For a public production system, also use private durable object storage, malware scanning, retention limits, and backups.
 
-Never mark a registration paid based only on the browser redirect. Configure webhook retries and monitor server logs.
+## Stripe
 
-## Strava setup
+Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `BASE_URL`. Configure a Stripe webhook at `/api/stripe/webhook` for checkout completion and async payment success/failure. Test in Stripe test mode first. Real credentials must only be configured as deployment secrets, never committed to git.
 
-Create a Strava API application and set its OAuth callback to `https://YOUR-DOMAIN/api/strava/callback`. Configure `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`, and `BASE_URL`. After registering, the participant can link Strava at `/api/strava/connect/CODE` and sync activities from `/track/CODE`. Strava scopes, API limits, and review requirements are controlled by Strava; verify current requirements before launch.
+## Strava
 
-## CMS and event lifecycle
+Set `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, and register `${BASE_URL}/api/strava/callback` as the OAuth callback in Strava. API scopes/quotas and approval rules are set by Strava. Participants must verify their email before connecting or syncing.
 
-- `/admin`: create and edit event details, activate a public event, search participants, export the latest 1,000 registrations to CSV, resend tickets, and review activity proofs.
-- `/`: public event landing/registration.
-- `/track/CODE`: upload a JPG/PNG/PDF activity proof or link/sync Strava.
-- Ticket PDF is generated and emailed only after verified payment.
-- Each event has a slug, dates, distances/prices, description, and active flag. Only one event can be active for public registration at a time.
+## Important production notes
 
-## Important security and operational limitations
-
-This repository is a starter application, not yet ready to accept real participant data or payments without further hardening and testing. In particular:
-
-- Participant tracking currently uses a registration code in the URL as the access credential. Anyone who obtains that URL can see the tracking page and submit activity. Before launch, replace this with an expiring, single-purpose email verification link or OTP, add revocation, and rate-limit verification/upload endpoints.
-- Upload filtering currently relies on the client-supplied MIME type. Before public use, validate file signatures, store files in private durable storage, and scan for malware; serve proof files only through authenticated admin routes.
-- Ticket email failures are logged, not placed in a durable retry queue. Add retry/backoff and admin delivery status monitoring before a real event.
-- Add backup/restore drills, payment reconciliation/refunds, privacy/retention policy, admin audit log, and production monitoring.
-- SQLite/local upload storage requires a persistent disk and a single app instance. For horizontal scaling, migrate to managed PostgreSQL, shared session storage, and private object storage.
-- Configure HTTPS, a unique strong `SESSION_SECRET`, strong admin password, SMTP deliverability, Stripe live webhook, privacy/legal copy, and test the full paid-registration flow in staging.
-
-Do not put credentials in the repository or send secrets in chat. Configure them as environment variables in the hosting provider.
+- Use HTTPS and a persistent disk. SQLite and local uploads are for a single-instance deployment; use PostgreSQL/shared sessions/object storage before scaling horizontally.
+- Back up and test restoration of the database and uploaded files. Set privacy, consent, data-retention, and deletion policies.
+- Payment reconciliation, refunds, malware scanning, monitoring, and end-to-end staging tests are still required before accepting real entrants.
+- The example seeded event dates are illustrative; create and activate a future event in `/admin` before registration.
