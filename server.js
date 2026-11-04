@@ -246,10 +246,9 @@ async function initializeDatabase() {
 
   const hasEvent = await one('SELECT id FROM events LIMIT 1');
   if (!hasEvent) {
-    const today = new Date();
-    const start = new Date(today.getTime() + 7 * 86400000).toISOString().slice(0, 10);
-    const end = new Date(today.getTime() + 30 * 86400000).toISOString().slice(0, 10);
-    const deadline = new Date(today.getTime() + 5 * 86400000).toISOString().slice(0, 10);
+    const start = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const end = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const deadline = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
     await run(`INSERT INTO events(slug,name,description,start_date,end_date,registration_deadline,distances_json,active)
       VALUES(?,?,?,?,?,?,?,1)`, [
       'langkahbersama-virtual-run',
@@ -317,15 +316,6 @@ async function applyPromoToAmount(amount, promoCode, eventId = null) {
   return { amount: finalAmount, discount, promo };
 }
 
-async function eventSummary() {
-  const rows = await many('SELECT * FROM events ORDER BY id DESC');
-  return rows.map(row => ({
-    ...row,
-    distances: typeof row.distances_json === 'string' ? JSON.parse(row.distances_json) : row.distances_json,
-    active: !!row.active
-  }));
-}
-
 app.get('/api/health', (req, res) => res.json({ ok: true, status: 'healthy' }));
 
 app.get('/api/events/active', asyncRoute(async (req, res) => {
@@ -359,7 +349,12 @@ app.post('/api/admin/logout', requireAdmin, (req, res) => {
 app.get('/api/admin/me', requireAdmin, (req, res) => res.json({ ok: true }));
 
 app.get('/api/admin/events', requireAdmin, asyncRoute(async (req, res) => {
-  res.json(await eventSummary());
+  const rows = await many('SELECT * FROM events ORDER BY id DESC');
+  res.json(rows.map(row => ({
+    ...row,
+    distances: typeof row.distances_json === 'string' ? JSON.parse(row.distances_json) : row.distances_json,
+    active: !!row.active
+  })));
 }));
 
 app.post('/api/admin/events', requireAdmin, asyncRoute(async (req, res) => {
