@@ -1,39 +1,59 @@
 # Virtual Run Event CMS
 
-Reusable CMS for virtual running events with an admin dashboard, Stripe Checkout, payment-webhook-confirmed tickets, email delivery retries, participant activity uploads and optional Strava sync.
+Reusable CMS for virtual running events with an admin dashboard, Stripe Checkout, payment-webhook-confirmed tickets, email retries, activity uploads and optional Strava sync.
 
-## Run locally
+## Local setup
 
-Requires Node.js 20+. Copy `.env.example` to `.env`, change `SESSION_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`, then run `npm install && npm start`. Visit `/` for the event site and `/admin` for the CMS. The app creates an example event on first start; create and activate a future-dated event before opening registration.
+Requires Node.js 20+. Copy `.env.example` to `.env`, replace all placeholder credentials, then run `npm install && npm start`. Visit `/` for the event site and `/admin` for the CMS. The app creates an illustrative event on first start; create and activate a future-dated event before opening registration.
 
-## Hosting configuration
+## Production deployment configuration
 
-Configure all variables from `.env.example` in the hosting provider's secret/environment settings, not in Git. Use a persistent disk mounted at the parent directory of `DB_FILE`; the `uploads/` directory must also be on persistent private storage. This SQLite/local-file design is for a single server instance. Use PostgreSQL, shared session storage and private object storage before horizontal scaling. Enable HTTPS and configure the hosting platform's trusted proxy settings appropriately.
+The repository includes a production `Dockerfile` and `compose.yaml`. Configure secrets in the host environment or an untracked `.env`; do not commit secrets. Set `BASE_URL` to your public HTTPS origin, a unique `SESSION_SECRET` (at least 32 characters), a strong admin password, Stripe live credentials/webhook, SMTP, and optional Strava credentials. `compose.yaml` persists SQLite in `/data` and uploads in a separate volume. It binds the service to localhost by default; put a TLS reverse proxy in front of it. Review proxy trust and firewall settings for your hosting environment before deployment.
 
-`BASE_URL` must be the public HTTPS origin. Set `NODE_ENV=production`, use a fresh unique session secret, and choose a strong admin password. Keep backups and test restores before an event.
+Start:
 
-## Stripe and automatic tickets
+```sh
+cp .env.example .env
+# Edit .env and replace every example value
+mkdir -p backups
+chmod +x scripts/backup.sh
+ docker compose up --build -d
+```
 
-Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, then register `https://YOUR-DOMAIN/api/stripe/webhook` in Stripe for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, and `checkout.session.async_payment_failed`. Use Stripe test mode for staging first. The server confirms payment only from a valid signature-verified webhook, queues ticket email in SQLite, and retries temporary SMTP errors with exponential backoff (up to 12 attempts). Admins can inspect `/api/admin/ticket-jobs` after signing in and enqueue a resend from the participant list. Configure and verify SMTP deliverability: it is required both for participant email verification and ticket delivery.
+Back up the live database and uploaded evidence using the online SQLite backup API:
 
-A successful browser redirect alone is not payment confirmation. Reconcile transactions and implement your refund workflow with the payment provider before handling live sales.
+```sh
+DB_FILE=/path/to/cms.db UPLOAD_DIR=/path/to/uploads BACKUP_DIR=./backups ./scripts/backup.sh
+```
 
-## Participant access and activity moderation
+For the Docker Compose deployment, inspect the named volume mount path with `docker volume inspect`, or run a one-off backup container. Store backups encrypted and off-host; test restoration before an event. SQLite/local volumes target one application instance, not horizontal scaling.
 
-Participants verify their registration email through a short-lived, single-use link before viewing activity data, uploading proof, or connecting/syncing Strava. Uploads are size-limited, checked against file signatures (JPEG, PNG, PDF), stored under random names with restrictive file permissions, and served only to admins. File signature checks do not replace malware scanning; add a malware scanning service and private object storage for public production use.
+## Stripe payment and automated tickets
 
-The admin Activity tab supports filtering/search and approve/reject moderation. Strava OAuth requires an application and callback URL `https://YOUR-DOMAIN/api/strava/callback`; Strava determines available scopes, quotas and review requirements.
+Configure `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`. Register `https://YOUR-DOMAIN/api/stripe/webhook` in Stripe for checkout completion and async success/failure events. Payment is confirmed only by a valid signature-verified webhook. Paid tickets enter a persistent email queue with exponential retry; SMTP must be configured for delivery.
 
-## Admin features
+See [PAYMENT-E2E.md](PAYMENT-E2E.md) for Stripe test-mode checkout, CLI webhook forwarding, ticket email and failure/retry testing. Never use real card details during staging. The success redirect alone is not proof of payment.
 
-- Create/edit and activate reusable events.
-- Search and export up to 1,000 recent participants as CSV.
-- Review activity submissions, approve/reject, and inspect uploaded evidence.
-- Inspect payment state and ticket-mail queue status; enqueue paid-ticket resends.
+## Admin monitoring
 
-## Before launch
+The admin dashboard includes payment state and ticket-mail status, attempt count, next retry time and last delivery error. Admins can manually enqueue a resend for paid tickets. Activity moderation supports search/filter, evidence viewing, and approve/reject.
 
-- Run end-to-end staging tests for registration, Stripe webhook retries, email verification, ticket generation/delivery, upload validation, admin moderation and backup restoration.
-- Configure privacy notice, consent, data-retention/deletion, refund/cancellation policy, monitoring and incident response.
-- Add malware scanning and persistent private storage; consider PostgreSQL/Redis before multi-instance operation.
-- Ensure event dates, prices, capacity, email sender and payment account are correct. Do not commit credentials or send them in chat.
+For authenticated operational data, the admin API exposes `/api/admin/ticket-jobs`; use it only after admin login. No credentials should be sent in chat or stored in Git.
+
+## Participant access, uploads and Strava
+
+Participants verify their registered email with a short-lived, single-use link before viewing activity data, uploading proof, or connecting/syncing Strava. Uploads are size-limited, signature-checked (JPEG, PNG, PDF), stored under random names with restrictive permissions, and served only to admins. File signatures are not malware scanning; add a scanning service and private object storage for public production use.
+
+For Strava, set `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET` and register `https://YOUR-DOMAIN/api/strava/callback`. Check Strava's current scope, quota and review requirements.
+
+## Deployment verification
+
+Run a non-payment smoke test after deployment:
+
+```sh
+BASE_URL=https://your-domain.example ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD='your-secret' npm run test:smoke
+```
+
+It checks public page, active event and authenticated admin read APIs. Complete the Stripe test-mode flow in `PAYMENT-E2E.md` before enabling live checkout.
+
+Before launch, configure HTTPS, SMTP sender verification, durable storage, encrypted off-host backups, privacy/consent/retention policies, refunds/reconciliation, malware scanning, monitoring and incident response. Run a backup restore drill. Keep deployment credentials in provider secrets.

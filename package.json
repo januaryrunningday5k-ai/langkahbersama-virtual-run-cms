@@ -2,9 +2,13 @@
   "name": "virtual-run-event-cms",
   "version": "1.0.0",
   "private": true,
-  "description": "Multi-event virtual running CMS with Stripe payments, automated PDF tickets, activity uploads, and Strava linking.",
+  "description": "Multi-event virtual running CMS with Stripe, automated tickets, activity tracking, and Strava linking.",
   "engines": { "node": ">=20" },
-  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test:smoke": "node scripts/smoke-test.js"
+  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.8.1",
