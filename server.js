@@ -137,6 +137,18 @@ async function initializeDatabase() {
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT fk_mail_jobs_registration FOREIGN KEY (registration_id) REFERENCES registrations(id),
       INDEX idx_mail_jobs_status (status, id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    `CREATE TABLE IF NOT EXISTS site_benefits (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(120) NOT NULL,
+      description TEXT NOT NULL,
+      icon VARCHAR(60) NOT NULL DEFAULT '🏅',
+      image_path VARCHAR(255) NULL,
+      type VARCHAR(30) NOT NULL DEFAULT 'general',
+      sort_order INT NOT NULL DEFAULT 0,
+      active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_site_benefits_type_active (type, active, sort_order)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
   ];
   for (const statement of schema) await pool.query(statement);
@@ -154,6 +166,19 @@ async function initializeDatabase() {
       'Ikuti tantangan lari virtual dari mana saja.',
       date(7), date(30), date(5),
       JSON.stringify({ '5K': 150000, '10K': 250000, '21K': 350000, '42K': 550000 })
+    ]);
+  }
+  if (!(await one('SELECT id FROM site_benefits LIMIT 1'))) {
+    await run(`INSERT INTO site_benefits(title, description, icon, type, sort_order, active)
+      VALUES
+      (?, ?, '🏅', 'general', 1, 1),
+      (?, ?, '🎽', 'racepack', 2, 1),
+      (?, ?, '📈', 'general', 3, 1),
+      (?, ?, '🔗', 'general', 4, 1)`, [
+      'Finisher rewards', 'Peserta yang menyelesaikan jarak dan memenuhi syarat dapat menerima medali, sertifikat, dan hadiah finisher yang dijadwalkan panitia.',
+      'Medali & e-certificate', 'Bukti finish dan hasil aktivitas peserta tercatat dengan aman dan bisa diverifikasi oleh panitia.',
+      'Race pack', 'Setiap pendaftaran masuk dapat menerima race pack siap kirim, termasuk nomor bib digital, kaos, dan item event sesuai kategori.',
+      'Aktivitas terpantau', 'Pantau progres lari langsung dari dashboard peserta dan hubungkan Strava untuk sinkronisasi otomatis.',
     ]);
   }
 }
@@ -214,6 +239,13 @@ function validDate(v) { return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Da
 function eventView(row) {
   const distances = typeof row.distances_json === 'string' ? JSON.parse(row.distances_json) : row.distances_json;
   return { ...row, distances, active: !!row.active };
+}
+function benefitView(row) {
+  return {
+    ...row,
+    image_url: row.image_path ? `${BASE_URL}/uploads/${row.image_path}` : null,
+    active: !!row.active
+  };
 }
 function requireAdmin(req, res, next) {
   if (!req.session.adminId) return res.status(401).json({ error: 'Silakan masuk sebagai admin.' });
@@ -320,6 +352,10 @@ app.get('/api/events/active', asyncRoute(async (req, res) => {
   if (!e) return res.status(404).json({ error: 'Belum ada event aktif.' });
   res.json(eventView(e));
 }));
+app.get('/api/benefits', asyncRoute(async (req, res) => {
+  const rows = await many('SELECT * FROM site_benefits WHERE active=1 ORDER BY sort_order ASC, id DESC');
+  res.json(rows.map(benefitView));
+}));
 
 app.post('/api/registrations', asyncRoute(async (req, res) => {
   if (!stripe) return res.status(503).json({ error: 'Pembayaran online belum dikonfigurasi.' });
@@ -417,6 +453,14 @@ const upload = multer({
     cb(null, true);
   }
 });
+const benefitUpload = multer({
+  storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return cb(new Error('Format gambar benefit tidak didukung.'));
+    cb(null, true);
+  }
+});
 function detectFile(buffer) {
   if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return { ext: '.jpg', mime: 'image/jpeg' };
   if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { ext: '.png', mime: 'image/png' };
@@ -435,7 +479,7 @@ app.post('/api/track/:code/upload', participant, upload.single('proof'), asyncRo
 }));
 app.get('/uploads/:filename', requireAdmin, asyncRoute(async (req, res) => {
   const filename = path.basename(req.params.filename);
-  if (!(await one('SELECT id FROM activities WHERE proof_path=?', [filename]))) return res.sendStatus(404);
+  if (!(await one('SELECT id FROM activities WHERE proof_path=?', [filename])) && !(await one('SELECT id FROM site_benefits WHERE image_path=?', [filename]))) return res.sendStatus(404);
   res.sendFile(path.join(UPLOAD_DIR, filename));
 }));
 
@@ -538,6 +582,59 @@ app.post('/api/admin/events/:id/activate', requireAdmin, asyncRoute(async (req, 
   await run('UPDATE events SET active = CASE WHEN id = ? THEN 1 ELSE 0 END', [id]);
   res.json({ ok: true });
 }));
+
+app.get('/api/admin/benefits', requireAdmin, asyncRoute(async (req, res) => {
+  const benefits = await many('SELECT * FROM site_benefits ORDER BY sort_order ASC, id DESC');
+  res.json(benefits.map(benefitView));
+}));
+app.post('/api/admin/benefits', requireAdmin, benefitUpload.single('image'), asyncRoute(async (req, res) => {
+  const title = text(req.body.title, 120);
+  const description = text(req.body.description, 2000);
+  const icon = text(req.body.icon, 30) || '🏅';
+  const type = ['general', 'finish', 'racepack'].includes(req.body.type) ? req.body.type : 'general';
+  const sortOrder = Number(req.body.sort_order || 0);
+  if (!title || !description) return res.status(400).json({ error: 'Judul dan deskripsi benefit wajib diisi.' });
+  let imagePath = null;
+  if (req.file) {
+    const fileExt = path.extname(req.file.originalname || '').toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt)) return res.status(400).json({ error: 'Format gambar benefit tidak valid.' });
+    const filename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${fileExt}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.file.buffer, { mode: 0o600 });
+    imagePath = filename;
+  }
+  const result = await run('INSERT INTO site_benefits(title,description,icon,image_path,type,sort_order,active) VALUES(?,?,?,?,?,?,1)', [title, description, icon, imagePath, type, sortOrder]);
+  res.status(201).json({ ok: true, id: result.insertId });
+}));
+app.put('/api/admin/benefits/:id', requireAdmin, benefitUpload.single('image'), asyncRoute(async (req, res) => {
+  const id = Number(req.params.id);
+  const existing = await one('SELECT * FROM site_benefits WHERE id=?', [id]);
+  if (!existing) return res.sendStatus(404);
+  const title = text(req.body.title, 120);
+  const description = text(req.body.description, 2000);
+  const icon = text(req.body.icon, 30) || '🏅';
+  const type = ['general', 'finish', 'racepack'].includes(req.body.type) ? req.body.type : 'general';
+  const sortOrder = Number(req.body.sort_order || 0);
+  const active = String(req.body.active || '1') === '1' ? 1 : 0;
+  if (!title || !description) return res.status(400).json({ error: 'Judul dan deskripsi benefit wajib diisi.' });
+  let imagePath = existing.image_path;
+  if (req.file) {
+    const fileExt = path.extname(req.file.originalname || '').toLowerCase();
+    if (!['.jpg', '.jpeg', '.png', '.webp'].includes(fileExt)) return res.status(400).json({ error: 'Format gambar benefit tidak valid.' });
+    const filename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${fileExt}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, filename), req.file.buffer, { mode: 0o600 });
+    imagePath = filename;
+  }
+  await run('UPDATE site_benefits SET title=?,description=?,icon=?,image_path=?,type=?,sort_order=?,active=? WHERE id=?', [title, description, icon, imagePath, type, sortOrder, active, id]);
+  res.json({ ok: true });
+}));
+app.delete('/api/admin/benefits/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const id = Number(req.params.id);
+  const existing = await one('SELECT * FROM site_benefits WHERE id=?', [id]);
+  if (!existing) return res.sendStatus(404);
+  await run('DELETE FROM site_benefits WHERE id=?', [id]);
+  res.json({ ok: true });
+}));
+
 app.get('/api/admin/registrations', requireAdmin, asyncRoute(async (req, res) => res.json(await many('SELECT r.id,r.code,r.name,r.email,r.phone,r.distance,r.amount,r.status,r.ticket_sent_at,r.created_at,e.name AS event_name FROM registrations r JOIN events e ON e.id=r.event_id ORDER BY r.id DESC'))));
 app.get('/api/admin/activities', requireAdmin, asyncRoute(async (req, res) => res.json(await many('SELECT a.*,r.code,r.name,r.email,e.name AS event_name FROM activities a JOIN registrations r ON r.id=a.registration_id JOIN events e ON e.id=r.event_id ORDER BY a.id DESC'))));
 app.patch('/api/admin/activities/:id', requireAdmin, asyncRoute(async (req, res) => {
