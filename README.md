@@ -1,34 +1,39 @@
 # Virtual Run Event CMS
 
-Reusable virtual-run CMS with admin event management, Stripe checkout, paid-ticket PDF/email delivery, participant activity uploads and optional Strava sync.
+Reusable CMS for virtual running events with an admin dashboard, Stripe Checkout, payment-webhook-confirmed tickets, email delivery retries, participant activity uploads and optional Strava sync.
 
-## Setup
+## Run locally
 
-Requires Node.js 20+, persistent storage for SQLite/uploads, Stripe and SMTP configuration for paid production use. Copy `.env.example` to `.env`, set a unique 32+ character `SESSION_SECRET`, `ADMIN_EMAIL`, and strong `ADMIN_PASSWORD`, then run `npm install && npm start`. Visit `/` and `/admin`.
+Requires Node.js 20+. Copy `.env.example` to `.env`, change `SESSION_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`, then run `npm install && npm start`. Visit `/` for the event site and `/admin` for the CMS. The app creates an example event on first start; create and activate a future-dated event before opening registration.
 
-## Ticket email retry queue
+## Hosting configuration
 
-Verified Stripe webhooks enqueue a durable SQLite email job. The worker retries delivery with exponential backoff (up to 12 attempts); administrators can enqueue a resend using `/api/admin/tickets/CODE/resend` after sign-in. Jobs and failure details are available from `/api/admin/ticket-jobs`. Configure SMTP to send mail. The webhook remains idempotent and never trusts a browser redirect for payment confirmation.
+Configure all variables from `.env.example` in the hosting provider's secret/environment settings, not in Git. Use a persistent disk mounted at the parent directory of `DB_FILE`; the `uploads/` directory must also be on persistent private storage. This SQLite/local-file design is for a single server instance. Use PostgreSQL, shared session storage and private object storage before horizontal scaling. Enable HTTPS and configure the hosting platform's trusted proxy settings appropriately.
 
-## Participant access
+`BASE_URL` must be the public HTTPS origin. Set `NODE_ENV=production`, use a fresh unique session secret, and choose a strong admin password. Keep backups and test restores before an event.
 
-A ticket code alone does not grant access to participant details or activity submission. Participants enter the ticket code and registration email at `/track/CODE`; the server emails a one-time, 20-minute verification link. The token is stored as a SHA-256 hash, is single-use, and establishes an HTTP-only session. The tracking API, upload endpoint, Strava connect and sync endpoints require this participant session. The participant can end the session with the logout button. Configure SMTP for verification messages.
+## Stripe and automatic tickets
 
-## Upload security
+Set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, then register `https://YOUR-DOMAIN/api/stripe/webhook` in Stripe for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, and `checkout.session.async_payment_failed`. Use Stripe test mode for staging first. The server confirms payment only from a valid signature-verified webhook, queues ticket email in SQLite, and retries temporary SMTP errors with exponential backoff (up to 12 attempts). Admins can inspect `/api/admin/ticket-jobs` after signing in and enqueue a resend from the participant list. Configure and verify SMTP deliverability: it is required both for participant email verification and ticket delivery.
 
-Uploads are held in memory while size-limited, then accepted only when their file signature matches JPEG, PNG, or PDF. Server-generated random filenames and restrictive file permissions are used; files are not served publicly and admin access is required to view them. This is format validation, not malware scanning. For a public production system, also use private durable object storage, malware scanning, retention limits, and backups.
+A successful browser redirect alone is not payment confirmation. Reconcile transactions and implement your refund workflow with the payment provider before handling live sales.
 
-## Stripe
+## Participant access and activity moderation
 
-Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `BASE_URL`. Configure a Stripe webhook at `/api/stripe/webhook` for checkout completion and async payment success/failure. Test in Stripe test mode first. Real credentials must only be configured as deployment secrets, never committed to git.
+Participants verify their registration email through a short-lived, single-use link before viewing activity data, uploading proof, or connecting/syncing Strava. Uploads are size-limited, checked against file signatures (JPEG, PNG, PDF), stored under random names with restrictive file permissions, and served only to admins. File signature checks do not replace malware scanning; add a malware scanning service and private object storage for public production use.
 
-## Strava
+The admin Activity tab supports filtering/search and approve/reject moderation. Strava OAuth requires an application and callback URL `https://YOUR-DOMAIN/api/strava/callback`; Strava determines available scopes, quotas and review requirements.
 
-Set `STRAVA_CLIENT_ID` and `STRAVA_CLIENT_SECRET`, and register `${BASE_URL}/api/strava/callback` as the OAuth callback in Strava. API scopes/quotas and approval rules are set by Strava. Participants must verify their email before connecting or syncing.
+## Admin features
 
-## Important production notes
+- Create/edit and activate reusable events.
+- Search and export up to 1,000 recent participants as CSV.
+- Review activity submissions, approve/reject, and inspect uploaded evidence.
+- Inspect payment state and ticket-mail queue status; enqueue paid-ticket resends.
 
-- Use HTTPS and a persistent disk. SQLite and local uploads are for a single-instance deployment; use PostgreSQL/shared sessions/object storage before scaling horizontally.
-- Back up and test restoration of the database and uploaded files. Set privacy, consent, data-retention, and deletion policies.
-- Payment reconciliation, refunds, malware scanning, monitoring, and end-to-end staging tests are still required before accepting real entrants.
-- The example seeded event dates are illustrative; create and activate a future event in `/admin` before registration.
+## Before launch
+
+- Run end-to-end staging tests for registration, Stripe webhook retries, email verification, ticket generation/delivery, upload validation, admin moderation and backup restoration.
+- Configure privacy notice, consent, data-retention/deletion, refund/cancellation policy, monitoring and incident response.
+- Add malware scanning and persistent private storage; consider PostgreSQL/Redis before multi-instance operation.
+- Ensure event dates, prices, capacity, email sender and payment account are correct. Do not commit credentials or send them in chat.
